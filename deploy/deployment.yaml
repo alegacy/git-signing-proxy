@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: git-signing-proxy
+  labels:
+    app.kubernetes.io/name: git-signing-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: git-signing-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: git-signing-proxy
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: git-signing-proxy
+          image: git-signing-proxy:latest
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          env:
+            - name: KEYS_DIR
+              value: /etc/signing-keys
+          volumeMounts:
+            - name: signing-keys
+              mountPath: /etc/signing-keys
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: signing-keys
+          secret:
+            secretName: git-signing-keys
+            defaultMode: 0444

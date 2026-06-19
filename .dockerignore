@@ -1,0 +1,7 @@
+.git
+.claude
+deploy
+scripts
+git-signing-proxy
+Makefile
+*.md
