@@ -57,16 +57,26 @@ run: build ## Run locally (set KEYS_DIR= and LISTEN_ADDR=)
 	KEYS_DIR=$(KEYS_DIR) LISTEN_ADDR=$(LISTEN_ADDR) ./$(BINARY)
 
 .PHONY: run-local
-run-local: docker-build ## Run in a local container (set KEYS_DIR= to mount keys)
-	$(CONTAINER_TOOL) run --rm -it \
+run-local: docker-build stop-local ## Run in a local container (set KEYS_DIR= to mount keys)
+	$(CONTAINER_TOOL) run -d \
 		-p 8080:8080 \
 		-v $(KEYS_DIR):/etc/signing-keys:ro,Z \
+		--userns=keep-id \
+		--user $(shell id -u):$(shell id -g) \
 		--name $(BINARY) \
 		$(IMG)
+	@echo "Container $(BINARY) started on port 8080"
+	@echo "  Logs: make logs-local"
+	@echo "  Stop: make stop-local"
 
 .PHONY: stop-local
 stop-local: ## Stop the local container
-	$(CONTAINER_TOOL) stop $(BINARY) 2>/dev/null || true
+	@$(CONTAINER_TOOL) stop $(BINARY) 2>/dev/null || true
+	@$(CONTAINER_TOOL) rm $(BINARY) 2>/dev/null || true
+
+.PHONY: logs-local
+logs-local: ## Show local container logs
+	$(CONTAINER_TOOL) logs -f $(BINARY)
 
 ##@ Deploy
 
