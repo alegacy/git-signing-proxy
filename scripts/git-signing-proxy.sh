@@ -4,7 +4,8 @@
 # Works as both gpg.ssh.program (SSH signing) and gpg.program (GPG signing).
 #
 # Environment:
-#   SIGNING_PROXY_URL - Base URL of the proxy (default: http://git-signing-proxy:8080)
+#   SIGNING_PROXY_SOCKET - Unix socket path (auto-detected at /tmp/claude/git-signing-proxy.sock)
+#   SIGNING_PROXY_URL    - Base URL for TCP mode (default: http://git-signing-proxy:8080)
 #
 # SSH mode setup:
 #   git config gpg.format ssh
@@ -20,7 +21,21 @@
 
 set -euo pipefail
 
+SIGNING_PROXY_SOCKET="${SIGNING_PROXY_SOCKET:-}"
 SIGNING_PROXY_URL="${SIGNING_PROXY_URL:-http://git-signing-proxy:8080}"
+
+# Auto-detect: prefer Unix socket if it exists
+if [[ -z "$SIGNING_PROXY_SOCKET" && -S "/tmp/claude/git-signing-proxy.sock" ]]; then
+    SIGNING_PROXY_SOCKET="/tmp/claude/git-signing-proxy.sock"
+fi
+
+if [[ -n "$SIGNING_PROXY_SOCKET" ]]; then
+    CURL_SOCKET_ARGS=(--unix-socket "${SIGNING_PROXY_SOCKET}")
+    CURL_BASE_URL="http://localhost"
+else
+    CURL_SOCKET_ARGS=()
+    CURL_BASE_URL="${SIGNING_PROXY_URL}"
+fi
 
 die() { echo "git-signing-proxy: $*" >&2; exit 1; }
 
@@ -48,9 +63,10 @@ if [[ "${1:-}" == "-Y" ]]; then
     [[ -f "$buffer_file" ]] || die "buffer file not found: $buffer_file"
 
     sig=$(curl -sf --max-time 30 \
+        "${CURL_SOCKET_ARGS[@]}" \
         --data-binary "@${buffer_file}" \
-        "${SIGNING_PROXY_URL}/sign/${key_id}") \
-        || die "POST ${SIGNING_PROXY_URL}/sign/${key_id} failed"
+        "${CURL_BASE_URL}/sign/${key_id}") \
+        || die "POST /sign/${key_id} failed"
 
     printf '%s\n' "$sig" > "${buffer_file}.sig"
     exit 0
@@ -74,9 +90,10 @@ done
 [[ -n "$key_id" ]] || die "no signing key specified"
 
 sig=$(curl -sf --max-time 30 \
+    "${CURL_SOCKET_ARGS[@]}" \
     --data-binary @- \
-    "${SIGNING_PROXY_URL}/sign/${key_id}") \
-    || die "POST ${SIGNING_PROXY_URL}/sign/${key_id} failed"
+    "${CURL_BASE_URL}/sign/${key_id}") \
+    || die "POST /sign/${key_id} failed"
 
 if [[ -n "$status_fd" ]]; then
     printf '[GNUPG:] SIG_CREATED D\n' >&"${status_fd}"

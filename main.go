@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -79,20 +80,24 @@ func (s *server) loadKeys() error {
 			continue
 		}
 		name := entry.Name()
-		if strings.HasSuffix(name, ".pub") {
+		if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".pub") {
 			continue
 		}
 		path := filepath.Join(s.keysDir, name)
 
 		data, err := os.ReadFile(path)
 		if err != nil {
-			slog.Warn("skipping unreadable key file", "file", name, "error", err)
+			slog.Debug("skipping unreadable file", "file", name, "error", err)
+			continue
+		}
+
+		if !strings.Contains(string(data), "PRIVATE KEY") {
 			continue
 		}
 
 		key, err := parseKey(name, data)
 		if err != nil {
-			slog.Warn("skipping unrecognized key file", "file", name, "error", err)
+			slog.Warn("failed to parse private key", "file", name, "error", err)
 			continue
 		}
 
@@ -295,6 +300,8 @@ func main() {
 		listenAddr = ":8080"
 	}
 
+	listenSocket := os.Getenv("LISTEN_SOCKET")
+
 	absKeysDir, err := filepath.Abs(keysDir)
 	if err != nil {
 		slog.Error("resolving keys directory", "error", err)
@@ -312,7 +319,6 @@ func main() {
 	mux.HandleFunc("GET /healthz", srv.handleHealthz)
 
 	httpServer := &http.Server{
-		Addr:         listenAddr,
 		Handler:      mux,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -323,12 +329,31 @@ func main() {
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		slog.Info("starting git-signing-proxy",
-			"addr", listenAddr,
-			"keys_dir", absKeysDir,
-			"loaded_keys", len(srv.keys),
-		)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if listenSocket != "" {
+			os.Remove(listenSocket)
+			var ln net.Listener
+			ln, err = net.Listen("unix", listenSocket)
+			if err != nil {
+				slog.Error("creating unix socket", "path", listenSocket, "error", err)
+				os.Exit(1)
+			}
+			slog.Info("starting git-signing-proxy",
+				"socket", listenSocket,
+				"keys_dir", absKeysDir,
+				"loaded_keys", len(srv.keys),
+			)
+			err = httpServer.Serve(ln)
+		} else {
+			httpServer.Addr = listenAddr
+			slog.Info("starting git-signing-proxy",
+				"addr", listenAddr,
+				"keys_dir", absKeysDir,
+				"loaded_keys", len(srv.keys),
+			)
+			err = httpServer.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			slog.Error("server stopped", "error", err)
 			os.Exit(1)
 		}
@@ -343,5 +368,9 @@ func main() {
 	if err := httpServer.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
 		os.Exit(1)
+	}
+
+	if listenSocket != "" {
+		os.Remove(listenSocket)
 	}
 }

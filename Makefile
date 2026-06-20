@@ -4,6 +4,7 @@ CONTAINER_TOOL ?= podman
 NAMESPACE      ?= git-signing-proxy
 KEYS_DIR       ?= $(HOME)/.ssh
 LISTEN_ADDR    ?= :8080
+LISTEN_SOCKET  ?= /tmp/claude/git-signing-proxy.sock
 
 export GOTOOLCHAIN ?= go1.25.9
 
@@ -53,13 +54,14 @@ docker-push: ## Push container image
 ##@ Local
 
 .PHONY: run
-run: build ## Run locally (set KEYS_DIR= and LISTEN_ADDR=)
-	KEYS_DIR=$(KEYS_DIR) LISTEN_ADDR=$(LISTEN_ADDR) ./$(BINARY)
+run: build ## Run locally (uses Unix socket by default, LISTEN_SOCKET= to disable)
+	@if [ -n "$(LISTEN_SOCKET)" ]; then mkdir -p $(dir $(LISTEN_SOCKET)); fi
+	KEYS_DIR=$(KEYS_DIR) LISTEN_SOCKET=$(LISTEN_SOCKET) LISTEN_ADDR=$(LISTEN_ADDR) ./$(BINARY)
 
 .PHONY: run-local
 run-local: docker-build stop-local ## Run in a local container (set KEYS_DIR= to mount keys)
 	$(CONTAINER_TOOL) run -d \
-		-p 8080:8080 \
+		-p 127.0.0.1:8080:8080 \
 		-v $(KEYS_DIR):/etc/signing-keys:ro,Z \
 		--userns=keep-id \
 		--user $(shell id -u):$(shell id -g) \
@@ -76,7 +78,7 @@ stop-local: ## Stop the local container
 
 .PHONY: logs-local
 logs-local: ## Show local container logs
-	$(CONTAINER_TOOL) logs -f $(BINARY)
+	$(CONTAINER_TOOL) logs --tail=50 $(BINARY)
 
 ##@ Deploy
 
