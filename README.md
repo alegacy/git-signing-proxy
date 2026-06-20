@@ -51,16 +51,21 @@ ssh-keygen -t ed25519 -f ~/signing-keys/my-key -N "" -C "agent@example.com"
 ### Run locally
 
 ```bash
-# Run the binary directly
-make run KEYS_DIR=~/signing-keys
+# Run the binary directly (defaults to ~/.ssh for keys, Unix socket mode)
+make run
 
-# Or run in a container
-make run-local KEYS_DIR=~/signing-keys
+# Or run in a container (TCP mode on localhost:8080)
+make run-local
 ```
 
 ### Test the endpoint
 
 ```bash
+# Via Unix socket (when using make run)
+curl -sf --unix-socket /tmp/claude/git-signing-proxy.sock \
+  --data-binary @- http://localhost/sign/my-key <<< "hello world"
+
+# Via TCP (when using make run-local)
 echo "hello world" | curl -sf --data-binary @- http://localhost:8080/sign/my-key
 ```
 
@@ -80,13 +85,23 @@ Copy `scripts/git-signing-proxy.sh` into the sandbox and configure Git to use
 it as the signing program:
 
 ```bash
-export SIGNING_PROXY_URL="http://git-signing-proxy:8080"  # adjust to match your setup
-
 git config --global gpg.format ssh
 git config --global gpg.ssh.program /path/to/git-signing-proxy.sh
 git config --global user.signingKey my-key           # matches the filename in /etc/signing-keys/
 git config --global commit.gpgSign true
 git config --global tag.gpgSign true
+```
+
+The wrapper script auto-detects the connection method:
+
+1. If `/tmp/claude/git-signing-proxy.sock` exists, uses the Unix socket
+2. Otherwise falls back to `SIGNING_PROXY_URL` (default: `http://git-signing-proxy:8080`)
+
+Override with environment variables:
+
+```bash
+export SIGNING_PROXY_SOCKET=/path/to/socket    # force Unix socket
+export SIGNING_PROXY_URL=http://host:8080      # force TCP
 ```
 
 For GPG keys instead of SSH:
@@ -189,7 +204,8 @@ Returns `200 ok` if the server has at least one signing key loaded, or
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `KEYS_DIR` | `/etc/signing-keys` | Directory containing private key files |
-| `LISTEN_ADDR` | `:8080` | Address and port to listen on |
+| `LISTEN_ADDR` | `:8080` | Address and port to listen on (TCP mode) |
+| `LISTEN_SOCKET` | *(unset)* | Unix socket path; if set, TCP is disabled |
 
 ## Makefile Targets
 
@@ -208,9 +224,10 @@ make help
 | `clean` | Remove build artifacts |
 | `docker-build` | Build container image |
 | `docker-push` | Push container image |
-| `run` | Run the binary locally |
-| `run-local` | Run in a local container with mounted keys |
+| `run` | Run the binary locally (Unix socket by default) |
+| `run-local` | Run in a local container with mounted keys (TCP) |
 | `stop-local` | Stop the local container |
+| `logs-local` | Show local container logs |
 | `deploy` | Deploy to OpenShift |
 | `undeploy` | Remove from OpenShift |
 | `create-secret` | Create the signing key Kubernetes secret |
@@ -226,8 +243,11 @@ The service auto-detects key type by inspecting the file content:
 | GPG armored | `PGP PRIVATE KEY` header | PGP armored detached signature |
 | GPG binary | Binary keyring probe | PGP armored detached signature |
 
-Keys must be **unencrypted** (no passphrase). Public key files (`.pub`) are
-automatically skipped.
+Detection is content-based — the service scans each file for a `PRIVATE KEY`
+header, so `~/.ssh` can be used directly as `KEYS_DIR` without noise from
+`config`, `known_hosts`, or other non-key files. Keys must be **unencrypted**
+(no passphrase). Public key files (`.pub`) and dotfiles are automatically
+skipped.
 
 ## Security
 
