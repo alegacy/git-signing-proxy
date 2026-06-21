@@ -252,7 +252,7 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, err := io.ReadAll(io.LimitReader(r.Body, maxPayloadSize))
+	payload, err := io.ReadAll(io.LimitReader(r.Body, maxPayloadSize+1))
 	if err != nil {
 		slog.Error("reading request body", "error", err)
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
@@ -260,6 +260,10 @@ func (s *server) handleSign(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(payload) == 0 {
 		http.Error(w, "empty payload", http.StatusBadRequest)
+		return
+	}
+	if len(payload) > maxPayloadSize {
+		http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -336,6 +340,10 @@ func main() {
 			ln, err = net.Listen("unix", listenSocket)
 			if err != nil {
 				slog.Error("creating unix socket", "path", listenSocket, "error", err)
+				os.Exit(1)
+			}
+			if err := os.Chmod(listenSocket, 0600); err != nil {
+				slog.Error("setting socket permissions", "path", listenSocket, "error", err)
 				os.Exit(1)
 			}
 			slog.Info("starting git-signing-proxy",
